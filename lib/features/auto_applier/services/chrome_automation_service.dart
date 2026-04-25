@@ -320,7 +320,15 @@ class ChromeAutomationService {
               if (_processedJobs.contains(jobId)) continue;
               _processedJobs.add(jobId);
 
-              if (cardText.contains('Applied') || !cardText.contains('Easy Apply')) {
+              final hasEasyApplyBadge = await card.evaluate('''el => {
+                const text = el.innerText;
+                if (text.includes("Easy Apply")) return true;
+                const icon = el.querySelector('svg[data-test-icon="linkedin-bug-xxsmall"], .job-card-container__apply-method--easy-apply');
+                if (icon && text.includes("Apply")) return true;
+                return false;
+              }''');
+
+              if (cardText.contains('Applied') || !hasEasyApplyBadge) {
                 _log('  ⏭ Skipping: Already applied or No Easy Apply ($title)');
                 continue;
               }
@@ -381,9 +389,9 @@ class ChromeAutomationService {
       ElementHandle? applyButton;
       for (int i = 0; i < 5; i++) {
         // Try to find the button specifically in the details pane first
-        applyButton = await _page?.$('.jobs-details__main-content .jobs-apply-button, .jobs-details-module button[aria-label*="Easy Apply"]');
+        applyButton = await _page?.$('.jobs-details__main-content .jobs-apply-button, .jobs-details-module button[aria-label*="Easy Apply"], .jobs-details-module button[aria-label*="LinkedIn Apply"]');
         // Fallback to global
-        applyButton ??= await _page?.$('.jobs-apply-button, button[aria-label*="Easy Apply"]');
+        applyButton ??= await _page?.$('.jobs-apply-button, button[aria-label*="Easy Apply"], button[aria-label*="LinkedIn Apply"]');
         
         if (applyButton != null) break;
         await Future.delayed(const Duration(seconds: 1));
@@ -394,9 +402,21 @@ class ChromeAutomationService {
         return false;
       }
       
-      // Ensure it's the right button
-      final btnText = await applyButton.evaluate('el => el.innerText');
-      if (!btnText.toLowerCase().contains('easy apply')) {
+      // Ensure it's the right button (Easy Apply or new LinkedIn Apply button)
+      final isEasyApply = await applyButton.evaluate('''el => {
+        const text = el.innerText.toLowerCase();
+        if (text.includes('easy apply')) return true;
+        if (text.includes('apply')) {
+          // Check for LinkedIn bug icon or aria-label
+          if (el.querySelector('svg[data-test-icon="linkedin-bug-xxsmall"]') || 
+              (el.getAttribute('aria-label') || '').includes('LinkedIn Apply')) {
+            return true;
+          }
+        }
+        return false;
+      }''');
+      
+      if (!isEasyApply) {
         _log('  ⏭ Found Apply button but not Easy Apply. Skipping.');
         return false;
       }
@@ -765,175 +785,9 @@ class ChromeAutomationService {
         _log('    🤖 Filling $field -> $value');
       });
 
-      const shieldScript = r'''
-        (function() {
-          const ID = 'ai-glass-shield';
-          
-          const inject = () => {
-            if (document.getElementById(ID)) return;
-            
-            const shield = document.createElement('div');
-            shield.id = ID;
-            
-            const updateVisibility = () => {
-              const url = window.location.href;
-              const isAuth = url.includes('login') || 
-                             url.includes('checkpoint') || 
-                             url.includes('signup') || 
-                             url.includes('auth') || 
-                             url.includes('challenge');
-              shield.style.display = isAuth ? 'none' : 'flex';
-            };
-
-            shield.style.cssText = `
-              position: fixed !important;
-              top: 0 !important;
-              left: 0 !important;
-              width: 100vw !important;
-              height: 100vh !important;
-              z-index: 2147483647 !important;
-              background: rgba(0, 10, 20, 0.2) !important;
-              backdrop-filter: blur(3px) !important;
-              pointer-events: all !important;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              font-family: 'Segoe UI', Roboto, sans-serif !important;
-              user-select: none !important;
-              color: white !important;
-              box-shadow: inset 0 0 150px rgba(0, 255, 204, 0.4) !important;
-              border: 10px solid rgba(0, 255, 204, 0.3) !important;
-              transition: all 0.5s ease;
-            `;
-            updateVisibility();
-
-            shield.innerHTML = `
-              <div id="hud-main-container" style="
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                width: 100%;
-                height: 100%;
-                position: relative;
-              ">
-                <div id="interaction-warning" style="
-                  position: absolute;
-                  top: 50px;
-                  background: rgba(255, 50, 50, 0.95);
-                  color: white;
-                  padding: 15px 40px;
-                  border-radius: 50px;
-                  font-weight: bold;
-                  font-size: 18px;
-                  letter-spacing: 1px;
-                  box-shadow: 0 10px 40px rgba(255, 0, 0, 0.4);
-                  opacity: 0;
-                  transform: translateY(-20px);
-                  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-                  pointer-events: none;
-                  z-index: 2147483648;
-                  border: 2px solid white;
-                  white-space: nowrap;
-                ">
-                  ⚠️ SYSTEM LOCKED - AI PILOT IN CONTROL
-                </div>
-
-                <div style="
-                  background: rgba(10, 15, 25, 0.98);
-                  padding: 50px;
-                  border-radius: 30px;
-                  border: 1px solid rgba(0, 255, 204, 0.5);
-                  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.9), 0 0 50px rgba(0, 255, 204, 0.3);
-                  text-align: center;
-                  min-width: 500px;
-                  position: relative;
-                  overflow: hidden;
-                ">
-                  <div id="aurora-bg" style="position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(0, 255, 204, 0.08) 0%, transparent 70%); z-index: -1;"></div>
-                  <div style="font-size: 12px; color: #00ffcc; letter-spacing: 6px; margin-bottom: 25px; font-weight: bold; opacity: 0.8;">SMART APPLY INDUSTRIAL v3.1</div>
-                  <div id="ai-status-text" style="font-size: 28px; margin-bottom: 40px; font-weight: 300; min-height: 40px; text-shadow: 0 0 15px rgba(0, 255, 204, 0.6); color: #e0fdf9;">Initializing AI Pilot...</div>
-                  <div style="display: flex; gap: 25px; justify-content: center;">
-                     <button onclick="window.stopMission()" style="background: rgba(255, 50, 50, 0.1); color: #ff5555; border: 2px solid #ff5555; padding: 16px 36px; border-radius: 16px; cursor: pointer; font-weight: bold; font-size: 16px; transition: all 0.3s; text-transform: uppercase; letter-spacing: 2px;">Abort Mission</button>
-                  </div>
-                  <div style="margin-top: 45px; display: flex; justify-content: center; gap: 15px;">
-                    <div class="pulse-dot" style="width: 10px; height: 10px; background: #00ffcc; border-radius: 50%;"></div>
-                    <div class="pulse-dot" style="width: 10px; height: 10px; background: #00ffcc; border-radius: 50%; animation-delay: 0.2s;"></div>
-                    <div class="pulse-dot" style="width: 10px; height: 10px; background: #00ffcc; border-radius: 50%; animation-delay: 0.4s;"></div>
-                  </div>
-                </div>
-              </div>
-            `;
-            
-            // Inject styles separately to avoid them being rendered as text
-            const style = document.createElement('style');
-            style.textContent = `
-              #aurora-bg { animation: aurora-spin 12s linear infinite; }
-              @keyframes aurora-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-              .pulse-dot { animation: dot-pulse 1.5s infinite; }
-              @keyframes dot-pulse { 0% { opacity: 0.3; transform: scale(1); } 50% { opacity: 1; transform: scale(1.5); } 100% { opacity: 0.3; transform: scale(1); } }
-              #ai-glass-shield { animation: border-glow 4s infinite alternate; }
-              @keyframes border-glow { from { border-color: rgba(0, 255, 204, 0.2); box-shadow: inset 0 0 60px rgba(0, 255, 204, 0.1); } to { border-color: rgba(0, 255, 204, 0.6); box-shadow: inset 0 0 200px rgba(0, 255, 204, 0.4); } }
-            `;
-            shield.appendChild(style);
-            
-            document.documentElement.appendChild(shield);
-            
-            const showWarning = () => {
-              const warning = document.getElementById('interaction-warning');
-              if (!warning) return;
-              warning.style.opacity = '1';
-              warning.style.transform = 'translateY(0)';
-              setTimeout(() => {
-                warning.style.opacity = '0';
-                warning.style.transform = 'translateY(-20px)';
-              }, 2500);
-            };
-
-            const lockEvents = ['click', 'mousedown', 'mouseup', 'keydown', 'keyup', 'keypress', 'contextmenu'];
-            lockEvents.forEach(evt => {
-              window.addEventListener(evt, (e) => {
-                if (!e.isTrusted) return; // Allow programmatic/AI events
-                if (shield.style.display === 'none') return; // Allow login/auth interaction
-                const isAbortButton = e.target.closest('button') && e.target.innerText.includes('Abort');
-                if (!isAbortButton) {
-                  e.stopImmediatePropagation();
-                  e.preventDefault();
-                  showWarning();
-                }
-              }, true);
-            });
-
-            const observer = new MutationObserver(updateVisibility);
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-          };
-
-          // HEARTBEAT: Ensure shield is always present and top-most
-          setInterval(() => {
-            const shield = document.getElementById(ID);
-            if (!shield) {
-              inject();
-            } else if (shield.nextElementSibling) {
-              // Someone tried to put something over us, move back to end
-              document.documentElement.appendChild(shield);
-            }
-          }, 500);
-
-          if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', inject);
-          } else {
-            inject();
-          }
-        })();
-      ''';
-
-      await page.evaluateOnNewDocument(shieldScript);
-      try {
-        await page.evaluate(shieldScript);
-      } catch (e) {}
+      // Shield overlay and HUD removed as requested by user.
     } catch (e) {
-      _log('⚠️ Error applying Agent HUD: $e');
+      _log('⚠️ Error applying Agent HUD / exposing functions: $e');
     }
   }
 
